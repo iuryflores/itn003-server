@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 export type LookupKey={index:number;registryNumber:string;registryKind:string;book:string;actNumber:string;actKind:string;opening:boolean};
-export type LegacyAct={id:string;title:string|null;service:string|null;actKind:string;registeredAt:string|null;sealedAt:string|null;classification:string|null;georeferencing:boolean|null;polygon:string|null;cancelled:boolean;matchKind:string};
+export type LegacyAct={valuationValues?:string|null;valuationDto?:string|null;valuationDoi?:string|null;id:string;title:string|null;service:string|null;actKind:string;registeredAt:string|null;sealedAt:string|null;classification:string|null;georeferencing:boolean|null;polygon:string|null;cancelled:boolean;matchKind:string};
 export type LegacyMatch={index:number;status:'matched'|'ambiguous'|'not_found'|'invalid_key';message:string;record?:LegacyAct};
 export function lookupKeys(items:unknown[]):LookupKey[] {
  if(items.length>1000)throw new BadRequestException('O cruzamento com o legado suporta até 1000 atos por consulta nesta versão.');
@@ -31,6 +31,9 @@ JOIN LATERAL (
  to_char(a.registro,'DD/MM/YYYY') AS "registeredAt",to_char(a.selado,'DD/MM/YYYY') AS "sealedAt",
  a.classificacao_ato_itn003 AS classification,ir.possui_georreferenciamento AS georeferencing,
  ir.numero_poligono AS polygon,(a.cancelamento IS NOT NULL) AS cancelled,
+ a.valores->>'valorAvaliacao' AS "valuationValues",
+ a.dto->>'valorAvaliacao' AS "valuationDto",
+ a.doi_valor_avaliacao::text AS "valuationDoi",
  CASE WHEN a.tipo=k."actKind" THEN 'exact' ELSE 'opening' END AS "matchKind"
  FROM public.indicador_real ir JOIN public.ato a ON a.indicador_real_id=ir.id
  LEFT JOIN public.tipo_servico ts ON ts.id=a.tipo_servico_id

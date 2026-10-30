@@ -7,6 +7,20 @@ import {AuditService} from './audit.service';
 import {PreparationService} from './preparation.service';
 const raw='{"version":"1.3.0","cns":"123456","imoveis":[{"numero_matricula":"001","numero":9007199254740993},{"numero_matricula":"002"}]}';
 const preparation={kind:'itn003-preparation',version:1,file:'teste.json',raw,decisions:{0:'exclude'},reasons:{0:'Revisar no legado'}};
+
+test('registry survives reload and cannot be changed on an existing audit',async t=>{
+ const {service,create}=await setup(t);
+ const first=await service.save({...preparation,registry:'1RIGO'});
+ const second=await service.save({...preparation,registry:'2RIGO'});
+ assert.equal((await create().load(first.id)).preparation.registry,'1RIGO');
+ assert.equal((await create().load(second.id)).preparation.registry,'2RIGO');
+ await assert.rejects(service.save({...preparation,registry:'2RIGO'},first.id,first.revision),/cartório/);
+ await assert.rejects(service.save({...preparation,registry:'3RIGO'}),/Selecione/);
+ const old=await service.save(preparation);
+ assert.equal((await create().load(old.id)).preparation.registry,undefined);
+ await service.save({...preparation,registry:'2RIGO'},old.id,old.revision);
+ assert.equal((await create().load(old.id)).preparation.registry,'2RIGO');
+});
 async function setup(t:any){
  const root=await mkdtemp(join(tmpdir(),'itn003-preparations-test-'));
  t.after(async()=>{if(dirname(root)!==resolve(tmpdir())||!basename(root).startsWith('itn003-preparations-test-'))throw new Error('Unexpected test path');await rm(root,{recursive:true,force:true});});
@@ -62,4 +76,14 @@ test('classification overrides persist separately from the immutable original',a
  assert.equal(reopened.preparation.raw,raw);
  assert.deepEqual(reopened.preparation.classifications,{0:5});
  await assert.rejects(service.save({...preparation,classifications:{0:7}}),/entre 1 e 6/);
+});
+
+test('manual tax choice survives save and reload without changing source JSON',async t=>{
+ const {service,create}=await setup(t);
+ const taxOverrides={0:{value:'12345.6700',source:'ato.dto.valorAvaliacao'}};
+ const saved=await service.save({...preparation,taxOverrides});
+ const restored=(await create().load(saved.id)).preparation;
+ assert.deepEqual(restored.taxOverrides,taxOverrides);assert.equal(restored.raw,raw);
+ await service.save({...preparation,taxOverrides:{}},saved.id,saved.revision);
+ assert.deepEqual((await create().load(saved.id)).preparation.taxOverrides,{});
 });

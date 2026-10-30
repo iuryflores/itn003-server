@@ -1,3 +1,4 @@
+import {Registry,requireRegistry} from './registry';
 import { BadRequestException, ForbiddenException, HttpException, NotFoundException, Injectable, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -12,10 +13,10 @@ export function normalizeConnectionString(value:string) {
     if(!['postgres:','postgresql:'].includes(parsed.protocol)||!parsed.hostname||!parsed.pathname||parsed.pathname==='/')throw new Error();
     // Serializa credenciais reservadas (como @) sem codificar novamente os escapes já existentes.
     return parsed.toString();
-  }catch {throw new BadRequestException('POSTGRES_CONNECTION_STRING deve ser uma URL PostgreSQL válida.');}
+  }catch {throw new BadRequestException('A conexão do cartório deve ser uma URL PostgreSQL válida.');}
 }
 export function connectionError(code?:string) {
-  if(code==='28P01'||code==='28000'||code==='08P01')return 'O banco recusou a autenticação ou o protocolo de conexão. Confira POSTGRES_CONNECTION_STRING em server/.env.';
+  if(code==='28P01'||code==='28000'||code==='08P01')return 'O banco recusou a autenticação ou o protocolo de conexão. Confira a conexão do cartório selecionado em server/.env.';
   if(code==='ENOTFOUND'||code==='EAI_AGAIN')return 'Não foi possível localizar o servidor PostgreSQL.';
   if(code==='ECONNREFUSED')return 'A conexão PostgreSQL foi recusada. Confira o endereço, a porta e o acesso à rede.';
   if(code==='42501')return 'O usuário do banco não tem permissão para realizar esta consulta de leitura.';
@@ -36,12 +37,12 @@ export async function readOnlyTransaction<T>(client:Pick<PoolClient,'query'|'rel
 }
 @Injectable()
 export class LegacyService implements OnModuleDestroy {
-  private pool?:Pool;
-  private configuredUrl?:string;
-  private configured() {
+  private pools=new Map<Registry,{pool:Pool;url:string}>();
+  private configured(registry:Registry) {
     const envPath=resolve(__dirname,'..','.env');
     const file=existsSync(envPath)?parseEnv(readFileSync(envPath,'utf8')):{};
-    return process.env.POSTGRES_CONNECTION_STRING || file.POSTGRES_CONNECTION_STRING;
+    const key=`${registry}_POSTGRES_CONNECTION_STRING`;
+    return process.env[key] || file[key];
   }
   private queriesApproved() {
     const envPath=resolve(__dirname,'..','.env');
@@ -51,48 +52,51 @@ export class LegacyService implements OnModuleDestroy {
   private requireApproval() {
     if(!this.queriesApproved())throw new ForbiddenException('Consultas ao legado desabilitadas na configuração do servidor.');
   }
-  private async getPool() {
+  private async getPool(registry:Registry) {
     this.requireApproval();
-    const value=this.configured();
-    if(!value)throw new ServiceUnavailableException('Configure POSTGRES_CONNECTION_STRING em server/.env para conectar ao legado.');
+    const value=this.configured(registry);
+    if(!value)throw new ServiceUnavailableException(`Configure ${registry}_POSTGRES_CONNECTION_STRING em server/.env.`);
     const normalized=normalizeConnectionString(value);
-    if(this.configuredUrl!==normalized){
-      const previous=this.pool;
-      this.pool=new Pool({connectionString:normalized,max:2,connectionTimeoutMillis:8000,idleTimeoutMillis:10000,allowExitOnIdle:true});
-      // O driver pode emitir erros em conexões ociosas; nunca registrar detalhes de conexão.
-      this.pool.on('error',()=>{});
-      this.configuredUrl=normalized;
+    let current=this.pools.get(registry);
+    if(current?.url!==normalized){
+      const previous=current?.pool;
+      const pool=new Pool({connectionString:normalized,max:2,connectionTimeoutMillis:8000,idleTimeoutMillis:10000,allowExitOnIdle:true});
+      pool.on('error',()=>{});
+      current={pool,url:normalized};this.pools.set(registry,current);
       await previous?.end();
     }
-    return this.pool!;
+    return current!.pool;
   }
-  private async read<T>(work:(client:Pick<PoolClient,'query'|'release'>)=>Promise<T>) {
+  private async read<T>(work:(client:Pick<PoolClient,'query'|'release'>)=>Promise<T>,registry:Registry) {
     try {
-      const pool=await this.getPool();
+      const pool=await this.getPool(registry);
       return await readOnlyTransaction(await pool.connect(),work);
     }catch(error){
       if(error instanceof HttpException)throw error;
       throw new ServiceUnavailableException(connectionError((error as {code?:string})?.code));
     }
   }
-  async status() {
+  async status(value?:unknown) {
+    const registry=requireRegistry(value);
     if(!this.queriesApproved())return {enabled:false,connected:false,readOnly:true,mappingReady:false,message:'Consultas pela aplicação desabilitadas na configuração do servidor.'};
-    if(!this.configured())return {configured:false,connected:false,readOnly:true,mappingReady:false,message:'Configure POSTGRES_CONNECTION_STRING em server/.env.'};
+    if(!this.configured(registry))return {configured:false,connected:false,readOnly:true,mappingReady:false,message:`Configure ${registry}_POSTGRES_CONNECTION_STRING em server/.env.`};
     return this.read(async client=>{
       await client.query('SELECT 1');
       return {configured:true,connected:true,readOnly:true,mappingReady:true,message:'Conexão verificada. Consulte os atos do JSON para complementar a auditoria com títulos, serviços e datas do legado.'};
-    });
+    },registry);
   }
-  async context(items:unknown[]) {
+  async context(items:unknown[],value?:unknown) {
+    const registry=requireRegistry(value);
     this.requireApproval();
     const keys=lookupKeys(items);
     const rows=keys.length?await this.read(async client=>{
       const result=await client.query(CONTEXT_SQL,[JSON.stringify(keys)]);
       return result.rows;
-    }):[];
-    return {fetchedAt:new Date().toISOString(),source:'PostgreSQL legado · ato, indicador_real e tipo_servico',matches:matchResults(items.length,keys,rows)};
+    },registry):[];
+    return {registry,fetchedAt:new Date().toISOString(),source:'PostgreSQL legado · ato, indicador_real e tipo_servico',matches:matchResults(items.length,keys,rows)};
   }
-  async minute(id:string) {
+  async minute(id:string,value?:unknown) {
+    const registry=requireRegistry(value);
     this.requireApproval();
     if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw new BadRequestException('Identificador do ato inválido.');
     return this.read(async client=>{
@@ -102,17 +106,18 @@ export class LegacyService implements OnModuleDestroy {
         FROM public.ato a WHERE a.id=$1::uuid LIMIT 1`,[id]);
       if(!result.rows.length)throw new NotFoundException('Ato não encontrado no legado.');
       const row=result.rows[0];
-      return {...row,source:'public.ato.texto',fetchedAt:new Date().toISOString()};
-    });
+      return {...row,registry,source:'public.ato.texto',fetchedAt:new Date().toISOString()};
+    },registry);
   }
-  async structure() {
+  async structure(value?:unknown) {
+    const registry=requireRegistry(value);
     return this.read(async client=>{
       const result=await client.query(`SELECT table_schema AS schema, table_name AS table, column_name AS column, data_type AS type
         FROM information_schema.columns
         WHERE table_schema NOT IN ('pg_catalog','information_schema')
         ORDER BY table_schema,table_name,ordinal_position LIMIT 1801`);
       return {columns:result.rows.slice(0,1800),truncated:result.rows.length>1800,mappingReady:true};
-    });
+    },registry);
   }
-  async onModuleDestroy(){await this.pool?.end();}
+  async onModuleDestroy(){await Promise.all([...this.pools.values()].map(entry=>entry.pool.end()));}
 }

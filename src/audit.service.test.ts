@@ -102,3 +102,28 @@ test('export applies only classification edits and exclusions, preserving other 
  assert.equal(service.export(raw,[],{}),raw);
  for(const invalid of [{0:7},{0:'5'},{2:5},{'-1':3},{'00':5},[]])assert.throws(()=>service.audit(raw,invalid));
 });
+
+
+test('manual assessment override revalidates tax and exports exact decimal tokens',()=>{
+ const raw='{"version":"1.3.0","cns":"123456","imoveis":[{"tipo_imovel":2,"contexto_rural":1,"motivo_envio":1,"tipo_matricula_transcricao":1,"numero_matricula":"123","ato":4},{"ato":6,"valor_imposto":50.00}]}';
+ const source='ato.valores.valorAvaliacao';
+ assert.ok(service.audit(raw).items[0].issues.some((i:any)=>i.path==='/valor_imposto'));
+ const override={0:{value:'12345.67',source}};
+ const audit=service.audit(raw,{},override);
+ assert.equal(audit.items[0].data.valor_imposto,12345.67);
+ assert.ok(!audit.items[0].issues.some((i:any)=>i.path==='/valor_imposto'));
+ const lexicalRaw=raw.replace('\"ato\":4','\"ato\":4,\"n\":9007199254740993,\"other\":1.2300');
+ const output=service.export(lexicalRaw,[1],{0:4},{0:{value:'9007199254740993.1200',source}});
+ assert.ok(output.includes('"valor_imposto": 9007199254740993.1200')||output.includes('"valor_imposto":9007199254740993.1200'));
+ assert.ok(output.includes('"n":9007199254740993'));assert.ok(output.includes('"other":1.2300'));
+ assert.equal(JSON.parse(output).imoveis.length,1);
+ assert.equal(service.export(raw,[],{},{}),raw);
+ assert.equal(service.audit(raw,{},{}).items[1].data.valor_imposto,50);
+ assert.equal(service.audit(raw,{}, {1:{value:'0',source}}).items[1].data.valor_imposto,0);
+});
+test('rejects invalid tax overrides before audit and export',()=>{
+ const raw='{"imoveis":[{}]}';const source='ato.doi_valor_avaliacao';
+ for(const invalid of [[],{1:{value:'1',source}},{'00':{value:'1',source}},{0:{value:'1,00',source}},{0:{value:'-1',source}},{0:{value:'NaN',source}},{0:{value:1,source}},{0:{value:'1',source:'arbitrary'}}]){
+  assert.throws(()=>service.audit(raw,{},invalid));assert.throws(()=>service.export(raw,[],{},invalid));
+ }
+});

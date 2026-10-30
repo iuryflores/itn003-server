@@ -28,7 +28,7 @@ Observações de redação entre manual e schema são separadas das pendências.
 
 ## PostgreSQL do legado — infraestrutura de conexão
 
-Configure `POSTGRES_CONNECTION_STRING` em `.env` apenas no server (veja `.env.example`). O server aceita URLs `postgres://`, `postgresql://` e `postgresql+psycopg2://`. A configuração do arquivo é relida nas próximas consultas, exceto se a variável já estiver definida no ambiente do processo, que tem precedência. As credenciais nunca são retornadas à interface.
+Configure `1RIGO_POSTGRES_CONNECTION_STRING` e `2RIGO_POSTGRES_CONNECTION_STRING` em `.env` apenas no server (veja `.env.example`). O server aceita URLs `postgres://`, `postgresql://` e `postgresql+psycopg2://`. A configuração do arquivo é relida nas próximas consultas, exceto se a variável já estiver definida no ambiente do processo, que tem precedência. As credenciais nunca são retornadas à interface.
 
 - `GET /api/legacy/status`: testa a conexão sem ler dados dos atos.
 - `GET /api/legacy/structure`: consulta nomes e tipos de colunas em `information_schema`, limitado a 1800 colunas, para definir o mapeamento.
@@ -68,3 +68,13 @@ O salvamento é manual e funciona antes da exportação final. A escrita é seri
 `POST /api/audit` e `POST /api/export` aceitam `classifications`, um objeto com índice original do imóvel e código do campo `ato` entre 1 e 6, por exemplo `{"0":5}`. Campos e índices inválidos são rejeitados. A preparação persiste essas alterações separadamente de `raw`; o JSON original continua imutável. Preparações anteriores sem esse campo são compatíveis.
 
 A aplicação das alterações usa edição por posições do JSON, sem reserializar os demais valores, preservando números longos e a representação dos campos não alterados. A auditoria valida os valores editados pelo schema integral; a exportação aplica as alterações e as exclusões por índices originais. O relatório registra os códigos original e final.
+
+### Valor de avaliação
+
+A consulta de contexto inclui, separadamente, os campos `ato.valores.valorAvaliacao`, `ato.dto.valorAvaliacao` e `ato.doi_valor_avaliacao`. Os dois primeiros são caminhos JSON consultados a partir das colunas `valores` e `dto`; sua presença depende do cadastro real. Nenhum valor é priorizado, somado ou tratado automaticamente como imposto. Valores de avaliação e `valor_imposto` têm significados distintos. A integração deve ser conferida pela interface; não foram executadas consultas reais para validar esses campos nesta alteração.
+
+O valor de avaliação do legado pode ser aplicado manualmente como `valor_imposto` pelo botão **Usar como valor do imposto**, na minuta ou na revisão. A escolha registra a origem, recalcula as pendências, volta o ato à fila e acompanha o andamento salvo e o JSON final. **Restaurar valor do arquivo original** desfaz a alteração. Não há preenchimento automático nem escrita no PostgreSQL.
+
+O botão **Consultar campos ITN003** abre a referência de preenchimento, mesmo sem importar um arquivo. Inclui busca, filtros rural/urbano e obrigatório/condicional/opcional, observações dos manuais e referências aos schemas 1.3.0. A classificação considera exceções e estruturas aninhadas; a validação completa de cada ato continua sendo feita pela auditoria.
+
+Selecione **1RIGO** ou **2RIGO** antes de importar. Cada auditoria salva mantém o seu cartório; uma auditoria antiga sem identificação deve ser vinculada pela seleção em tela e salva novamente. Ao trocar de cartório, o andamento atual é salvo e o arquivo aberto é fechado. As conexões são configuradas somente no `server/.env`, em `1RIGO_POSTGRES_CONNECTION_STRING` e `2RIGO_POSTGRES_CONNECTION_STRING`; não há fallback para a variável antiga. Os endpoints do legado exigem `registry` na query de GETs ou no corpo de `POST /api/legacy/context`. O JSON final mantém o layout oficial, sem adicionar o cartório.

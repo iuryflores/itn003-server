@@ -4,12 +4,14 @@ import Ajv, { ErrorObject, ValidateFunction } from 'ajv';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { modify, applyEdits, parseTree, findNodeAtLocation, Node as JsonNode } from 'jsonc-parser';
+import {buildFieldGuide,GuideField} from './field-guide';
 
 function object(value: unknown): value is Record<string, any> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 @Injectable()
 export class AuditService {
   private validators = new Map<number, ValidateFunction>();
   private roots = new Map<number, ValidateFunction>();
+  private guides:Record<string,GuideField[]>={};
   constructor() {
     const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
     const directory = 'schemas';
@@ -17,10 +19,12 @@ export class AuditService {
     if (!root) throw new Error('Pasta dos schemas oficiais não encontrada.');
     for (const [type, name] of [[1, 'urbanos'], [2, 'rurais']] as const) {
       const schema = JSON.parse(readFileSync(resolve(root, directory, `imoveis-${name}-onr.schema.json`), 'utf8'));
+      this.guides[name]=buildFieldGuide(schema,name);
       this.validators.set(type, ajv.compile(schema.properties.imoveis.items));
       this.roots.set(type, ajv.compile({...schema, $id: undefined, properties: {...schema.properties, imoveis: {type: 'array', minItems: 1}}}));
     }
   }
+  fieldGuide(){return {version:'1.3.0',guides:this.guides};}
   parse(raw: unknown) {
     if (typeof raw === 'string') raw = raw.replace(/^\uFEFF/, '');
     if (typeof raw !== 'string') throw new BadRequestException('Envie o conteúdo do arquivo JSON.');
@@ -51,21 +55,42 @@ export class AuditService {
     }
     return result;
   }
-  private classifiedRaw(raw:unknown,changes:unknown={}) {
+  validateTaxOverrides(raw:unknown,changes:unknown={}) {
+    const {data}=this.parse(raw);
+    if(changes===undefined)changes={};
+    if(!changes||typeof changes!=='object'||Array.isArray(changes))throw new BadRequestException('Alterações de valor do imposto inválidas.');
+    const result:Record<number,{value:string;source:string}>={};
+    const sources=['ato.valores.valorAvaliacao','ato.dto.valorAvaliacao','ato.doi_valor_avaliacao'];
+    for(const [key,value] of Object.entries(changes)){
+      const index=Number(key);
+      if(!/^\d+$/.test(key)||!Number.isSafeInteger(index)||String(index)!==key||index>=data.imoveis.length||!object(data.imoveis[index]))throw new BadRequestException('O imposto referencia um ato inexistente.');
+      if(!object(value)||typeof value.value!=='string'||!/^(?:0|[1-9]\d{0,19})(?:\.\d{1,10})?$/.test(value.value)||!sources.includes(value.source))throw new BadRequestException('Informe um valor de avaliação numérico não negativo, com ponto decimal e origem reconhecida.');
+      result[index]={value:value.value,source:value.source};
+    }
+    return result;
+  }
+  private classifiedRaw(raw:unknown,changes:unknown={},taxChanges:unknown={}) {
     const source=this.parse(raw);
     const classifications=this.validateClassifications(raw,changes);
     let output=source.raw;
     for(const [index,code] of Object.entries(classifications)){
       output=applyEdits(output,modify(output,['imoveis',Number(index),'ato'],code,{}));
     }
+    const taxes=this.validateTaxOverrides(raw,taxChanges);
+    for(const [index,tax] of Object.entries(taxes)){
+      const path=['imoveis',Number(index),'valor_imposto'];
+      output=applyEdits(output,modify(output,path,0,{}));
+      const node=findNodeAtLocation(parseTree(output)!,path)!;
+      output=output.slice(0,node.offset)+tax.value+output.slice(node.offset+node.length);
+    }
     return output;
   }
   private issues(errors: ErrorObject[] | null | undefined) {
     return (errors ?? []).map(e => ({path: (e.instancePath + (e.keyword === 'required' ? '/' + e.params.missingProperty : e.keyword === 'additionalProperties' ? '/' + e.params.additionalProperty : '')) || '/', rule: e.keyword, message: describeError(e), source: `Anexo II · ${e.schemaPath}`}));
   }
-  audit(raw: unknown, classifications:unknown={}) {
+  audit(raw: unknown, classifications:unknown={},taxOverrides:unknown={}) {
     const original=this.parse(raw);
-    const {data} = this.parse(this.classifiedRaw(raw,classifications));
+    const {data} = this.parse(this.classifiedRaw(raw,classifications,taxOverrides));
     const root = this.roots.get(1)!;
     root(data);
     const rootIssues = this.issues(root.errors);
@@ -81,8 +106,8 @@ export class AuditService {
     });
     return {rootIssues, items, schemaVersion: '1.3.0'};
   }
-  export(raw: unknown, excluded: unknown, classifications:unknown={}) {
-    const parsed = this.parse(this.classifiedRaw(raw,classifications));
+  export(raw: unknown, excluded: unknown, classifications:unknown={},taxOverrides:unknown={}) {
+    const parsed = this.parse(this.classifiedRaw(raw,classifications,taxOverrides));
     if (!Array.isArray(excluded) || excluded.some(i => !Number.isInteger(i) || i < 0 || i >= parsed.data.imoveis.length)) throw new BadRequestException('Índices de exclusão inválidos.');
     const remove = new Set(excluded);
     const array = findNodeAtLocation(parsed.tree, ['imoveis'])!;

@@ -26,3 +26,9 @@ test('opening acts with number zero are explicit review cases',()=>{
  const match=matchResults(1,lookupKeys([opening]),[{...row,actKind:'ABERTURA',matchKind:'opening'}])[0];
  assert.equal(match.status,'matched');assert.ok(match.message.includes('difere'));
 });
+test('lookup exposes assessment sources separately and never aliases them as tax',()=>{
+ assert.ok(CONTEXT_SQL.includes("a.valores->>'valorAvaliacao'"));
+ assert.ok(CONTEXT_SQL.includes("a.dto->>'valorAvaliacao'"));
+ assert.ok(CONTEXT_SQL.includes('a.doi_valor_avaliacao::text'));
+ assert.ok(!/AS\s+"?valor_imposto/i.test(CONTEXT_SQL));
+});

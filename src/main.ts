@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { Body, Controller, Get, Inject, Module, Param, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Module, Param, Post, Query, Res } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AuditService } from './audit.service';
 import { LegacyService } from './legacy.service';
@@ -7,9 +7,10 @@ import { PreparationService } from './preparation.service';
 @Controller('api')
 class AuditController {
   constructor(@Inject(AuditService) private readonly service: AuditService) {}
-  @Post('audit') audit(@Body() body: {raw?: unknown;classifications?:unknown}) { return this.service.audit(body.raw,body.classifications); }
-  @Post('export') export(@Body() body: {raw?: unknown; excluded?: unknown;classifications?:unknown}, @Res() response: any) {
-    const result = this.service.export(body.raw, body.excluded,body.classifications);
+  @Get('field-guide') fieldGuide(){return this.service.fieldGuide();}
+  @Post('audit') audit(@Body() body: {raw?: unknown;classifications?:unknown;taxOverrides?:unknown}) { return this.service.audit(body.raw,body.classifications,body.taxOverrides); }
+  @Post('export') export(@Body() body: {raw?: unknown; excluded?: unknown;classifications?:unknown;taxOverrides?:unknown}, @Res() response: any) {
+    const result = this.service.export(body.raw, body.excluded,body.classifications,body.taxOverrides);
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('Content-Disposition', 'attachment; filename="itn003-auditado.json"');
     response.send(result);
@@ -18,10 +19,10 @@ class AuditController {
 @Controller('api/legacy')
 class LegacyController {
   constructor(@Inject(LegacyService) private readonly service:LegacyService, @Inject(AuditService) private readonly auditService:AuditService) {}
-  @Get('status') status(){return this.service.status();}
-  @Get('acts/:id/minute') async minute(@Param('id') id:string,@Res({passthrough:true}) response:any){response.setHeader('Cache-Control','no-store');return this.service.minute(id);}
-  @Get('structure') structure(){return this.service.structure();}
-  @Post('context') context(@Body() body:{raw?:unknown}){return this.service.context(this.auditService.parse(body.raw).data.imoveis);}
+  @Get('status') status(@Query('registry') registry?:string){return this.service.status(registry);}
+  @Get('acts/:id/minute') async minute(@Param('id') id:string,@Query('registry') registry:string,@Res({passthrough:true}) response:any){response.setHeader('Cache-Control','no-store');return this.service.minute(id,registry);}
+  @Get('structure') structure(@Query('registry') registry?:string){return this.service.structure(registry);}
+  @Post('context') context(@Body() body:{raw?:unknown;registry?:unknown}){return this.service.context(this.auditService.parse(body.raw).data.imoveis,body.registry);}
 }
 @Controller('api/preparations')
 class PreparationController {
