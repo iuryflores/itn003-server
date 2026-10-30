@@ -22,6 +22,22 @@ export function prioritizeErrors(errors: ErrorObject[]): ErrorObject[] {
   const seen=new Set<string>();
   return remaining.filter(e=>{const key=JSON.stringify([e.instancePath,e.keyword,e.params]);if(seen.has(key))return false;seen.add(key);return true;});
 }
+/** Illustrative format only; identifiers must come from the actual record. */
+export function patternExample(pattern:string):string|undefined {
+ const candidates=['15/10/2026','123456.1.1234567-12','GO-1234567-1234567890ABCDEF1234567890ABCDEF','12345-678','1234567-8',...Array.from({length:41},(_,i)=>'1234567890'.repeat(5).slice(0,i+1))];
+ try{return candidates.find(value=>new RegExp(pattern).test(value));}catch{return undefined;}
+}
+export function issueExample(e:ErrorObject):string|undefined {
+ const p=e.params;
+ if(e.keyword==='pattern')return patternExample(p.pattern);
+ if(e.keyword==='const')return JSON.stringify(p.allowedValue);
+ if(e.keyword==='enum')return JSON.stringify(p.allowedValues[0]);
+ if(e.keyword==='type')return ({string:'"Texto de exemplo"',number:'1234.56',integer:'1',boolean:'true',array:'[{ … }]',object:'{ … }',null:'null'} as Record<string,string>)[p.type];
+ if(e.keyword==='minimum')return String(p.limit);
+ if(e.keyword==='maximum')return String(p.limit);
+ if(e.keyword==='minLength'||e.keyword==='maxLength')return '1'.repeat(Math.min(p.limit,80));
+ return undefined;
+}
 export function describeError(e:ErrorObject) {
  const p=e.params;
  switch(e.keyword) {

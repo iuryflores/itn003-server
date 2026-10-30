@@ -1,6 +1,7 @@
+import {patternExample} from './diagnostics';
 type Schema=Record<string,any>;
 type Requirement='required'|'conditional'|'optional';
-export type GuideField={path:string;requirement:Requirement;rule:string;types:string[];sources:string[]};
+export type GuideField={path:string;example?:string;requirement:Requirement;rule:string;types:string[];sources:string[]};
 const optional=new Set(['decisao_jud','sistema_coordenadas','fuso_zona','sistema_referencia','coordenadas','numero_poligono','categoria_poligono','protocolo_prenotacao','data_protocolo_prenotacao','livro_transcricao','folha_transcricao','dados_confrontantes','onerosa_nao_onerosa','rip','fracao','nome_representante_legal','cpf_representante_legal','data_averbacao']);
 const notes:Record<string,string>={
  version:'Versão exigida pelo schema: 1.3.0.',cns:'Identificação da serventia na raiz do arquivo.',imoveis:'Lista com pelo menos um imóvel.',
@@ -88,7 +89,8 @@ export function buildFieldGuide(schema:Schema,kind:'rurais'|'urbanos'):GuideFiel
    if(key==='cod_sncr')rule='Para novo ato rural. O schema admite 12 ou 13 dígitos; ver observação da auditoria.';
    if(key==='car'||key==='cif')rule='Para novo ato, observadas as exceções do schema.';
    if(scope.includes('[]')&&scope!=='imoveis[]')rule+=' A exigência é relativa a cada elemento da estrutura informada; não torna a estrutura pai obrigatória por si só.';
-   fields.push({path:scope?`${scope}.${key}`:key,requirement,rule,types:[...new Set(definitions.flatMap(e=>{const t=e.schema.properties[key].type;return t?[t].flat():[];}))] as string[],sources:definitions.slice(0,3).map(e=>`Anexo II · imoveis-${kind}-onr.schema.json ${e.source}/properties/${key}`)});
+   const example=definitions.map(e=>e.schema.properties[key].pattern).filter(Boolean).map(patternExample).find(Boolean);
+   fields.push({example,path:scope?`${scope}.${key}`:key,requirement,rule,types:[...new Set(definitions.flatMap(e=>{const t=e.schema.properties[key].type;return t?[t].flat():[];}))] as string[],sources:definitions.slice(0,3).map(e=>`Anexo II · imoveis-${kind}-onr.schema.json ${e.source}/properties/${key}`)});
   }
  }
  return fields.sort((a,b)=>a.path.localeCompare(b.path));

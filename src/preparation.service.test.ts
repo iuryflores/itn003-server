@@ -87,3 +87,12 @@ test('manual tax choice survives save and reload without changing source JSON',a
  await service.save({...preparation,taxOverrides:{}},saved.id,saved.revision);
  assert.deepEqual((await create().load(saved.id)).preparation.taxOverrides,{});
 });
+
+test('pending field overrides survive saved progress and leave source immutable',async t=>{
+ const {service,create}=await setup(t);
+ const fieldOverrides={0:{cod_sncr:'0012345678901'}};
+ const saved=await service.save({...preparation,fieldOverrides});
+ const loaded=await create().load(saved.id);
+ assert.deepEqual(loaded.preparation.fieldOverrides,fieldOverrides);
+ assert.equal(loaded.preparation.raw,raw);
+});
