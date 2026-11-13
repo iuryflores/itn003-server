@@ -32,7 +32,8 @@ export function issueExample(e:ErrorObject):string|undefined {
  if(e.keyword==='pattern')return patternExample(p.pattern);
  if(e.keyword==='const')return JSON.stringify(p.allowedValue);
  if(e.keyword==='enum')return JSON.stringify(p.allowedValues[0]);
- if(e.keyword==='type')return ({string:'"Texto de exemplo"',number:'1234.56',integer:'1',boolean:'true',array:'[{ … }]',object:'{ … }',null:'null'} as Record<string,string>)[p.type];
+ if(e.keyword==='type'&&e.instancePath?.endsWith('/codigo_incra')&&p.type==='string')return '12345678901234';
+ if(e.keyword==='type')return ({number:'1234.56',integer:'1',boolean:'true',array:'[{ … }]',object:'{ … }',null:'null'} as Record<string,string>)[p.type];
  if(e.keyword==='minimum')return String(p.limit);
  if(e.keyword==='maximum')return String(p.limit);
  if(e.keyword==='minLength'||e.keyword==='maxLength')return '1'.repeat(Math.min(p.limit,80));

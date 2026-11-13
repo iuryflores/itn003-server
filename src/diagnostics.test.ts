@@ -24,3 +24,9 @@ test('examples keep dates readable and respect enum and type constraints',()=>{
  assert.equal(issueExample({keyword:'enum',params:{allowedValues:[2,3]}} as any),'2');
  assert.equal(issueExample({keyword:'type',params:{type:'number'}} as any),'1234.56');
 });
+
+
+test('string type errors never advertise generic text as a valid field format',()=>{
+ assert.equal(issueExample({keyword:'type',instancePath:'/nome',params:{type:'string'}} as any),undefined);
+ assert.equal(issueExample({keyword:'type',instancePath:'/codigo_incra',params:{type:'string'}} as any),'12345678901234');
+});
