@@ -8,9 +8,9 @@ import { PreparationService } from './preparation.service';
 class AuditController {
   constructor(@Inject(AuditService) private readonly service: AuditService) {}
   @Get('field-guide') fieldGuide(){return this.service.fieldGuide();}
-  @Post('audit') audit(@Body() body: {raw?: unknown;classifications?:unknown;taxOverrides?:unknown}) { return this.service.audit(body.raw,body.classifications,body.taxOverrides); }
-  @Post('export') export(@Body() body: {raw?: unknown; excluded?: unknown;classifications?:unknown;taxOverrides?:unknown}, @Res() response: any) {
-    const result = this.service.export(body.raw, body.excluded,body.classifications,body.taxOverrides);
+  @Post('audit') audit(@Body() body: {raw?: unknown;classifications?:unknown;taxOverrides?:unknown;propertyChanges?:unknown;fieldEdits?:unknown}) { return this.service.audit(body.raw,body.classifications,body.taxOverrides,body.propertyChanges,body.fieldEdits); }
+  @Post('export') export(@Body() body: {raw?: unknown; excluded?: unknown;classifications?:unknown;taxOverrides?:unknown;propertyChanges?:unknown;fieldEdits?:unknown}, @Res() response: any) {
+    const result = this.service.export(body.raw, body.excluded,body.classifications,body.taxOverrides,body.propertyChanges,body.fieldEdits);
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('Content-Disposition', 'attachment; filename="itn003-auditado.json"');
     response.send(result);

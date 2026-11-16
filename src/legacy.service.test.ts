@@ -66,13 +66,13 @@ test('context and minute route to the selected registry even for identical act i
   routed.push(registry);
   return work({query:async()=>({rows:[{id:'12345678-1234-1234-1234-123456789abc',text:registry}]})});
  };
- for(const registry of ['1RIGO','2RIGO']){
+ for(const registry of ['1RIGO','2RIGO','SENADOR_CANEDO']){
   const minute=await service.minute('12345678-1234-1234-1234-123456789abc',registry);
   assert.equal(minute.text,registry);assert.equal(minute.registry,registry);
   const context=await service.context([{tipo_matricula_transcricao:1,numero_matricula:'123',numero_ato:'1',tipo_ato:1}],registry);
   assert.equal(context.registry,registry);
  }
- assert.deepEqual(routed,['1RIGO','1RIGO','2RIGO','2RIGO']);
+ assert.deepEqual(routed,['1RIGO','1RIGO','2RIGO','2RIGO','SENADOR_CANEDO','SENADOR_CANEDO']);
 });
 test('manual validation mode prevents network access in all legacy endpoints',async()=>{
  const service=new LegacyService();

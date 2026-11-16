@@ -54,6 +54,11 @@ function requirements(schema:Schema):{must:Set<string>;may:Set<string>} {
  }
  return {must,may};
 }
+function fieldTypes(schema:Schema):string[]{
+ const own=schema.type?[schema.type].flat():[];
+ return [...own,...['anyOf','oneOf','allOf'].flatMap(key=>(schema[key]??[]).flatMap(fieldTypes))];
+}
+
 export function buildFieldGuide(schema:Schema,kind:'rurais'|'urbanos'):GuideField[]{
  const scopes=new Map<string,{schema:Schema;source:string}[]>();
  function visit(node:any,path:string,source:string){
@@ -88,7 +93,7 @@ export function buildFieldGuide(schema:Schema,kind:'rurais'|'urbanos'):GuideFiel
    if(key==='cod_sncr')rule='Para novo ato rural. O schema admite 12 ou 13 dígitos; ver observação da auditoria.';
    if(key==='car'||key==='cif')rule='Para novo ato, observadas as exceções do schema.';
    if(scope.includes('[]')&&scope!=='imoveis[]')rule+=' A exigência é relativa a cada elemento da estrutura informada; não torna a estrutura pai obrigatória por si só.';
-   fields.push({path:scope?`${scope}.${key}`:key,requirement,rule,types:[...new Set(definitions.flatMap(e=>{const t=e.schema.properties[key].type;return t?[t].flat():[];}))] as string[],sources:definitions.slice(0,3).map(e=>`Anexo II · imoveis-${kind}-onr.schema.json ${e.source}/properties/${key}`)});
+   fields.push({path:scope?`${scope}.${key}`:key,requirement,rule,types:[...new Set(definitions.flatMap(e=>fieldTypes(e.schema.properties[key])))] as string[],sources:definitions.slice(0,3).map(e=>`Anexo II · imoveis-${kind}-onr.schema.json ${e.source}/properties/${key}`)});
   }
  }
  return fields.sort((a,b)=>a.path.localeCompare(b.path));

@@ -4,6 +4,7 @@ import Ajv, { ErrorObject, ValidateFunction } from 'ajv';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { modify, applyEdits, parseTree, findNodeAtLocation, Node as JsonNode } from 'jsonc-parser';
+import {applyFieldEdits} from './field-edits';
 import {buildFieldGuide,GuideField} from './field-guide';
 
 function object(value: unknown): value is Record<string, any> { return !!value && typeof value === 'object' && !Array.isArray(value); }
@@ -25,6 +26,36 @@ export class AuditService {
     }
   }
   fieldGuide(){return {version:'1.3.0',guides:this.guides};}
+  requiredFields(item:unknown) {
+    if(!object(item))return [];
+    const validator=this.validators.get(item.tipo_imovel);
+    if(!validator)return [];
+    const fields=this.guides[item.tipo_imovel===1?'urbanos':'rurais'];
+    const required:{path:string;rule:string;types?:string[]}[]=[];
+    const escape=(key:string)=>key.replaceAll('~','~0').replaceAll('/','~1');
+    const visit=(value:unknown,path:string,guidePath:string)=>{
+      if(Array.isArray(value)){
+        value.forEach((child,index)=>visit(child,path+'/'+index,guidePath+'[]'));
+      }else if(object(value)){
+        for(const key of Object.keys(value)){
+          const childPath=path+'/'+escape(key);
+          const childGuidePath=guidePath+'.'+key;
+          const field=fields.find(entry=>entry.path===childGuidePath);
+          if(field){
+            const candidate=structuredClone(item);
+            const parent=path.slice(1).split('/').filter(Boolean).reduce((node,key)=>node[key.replaceAll('~1','/').replaceAll('~0','~')],candidate);
+            delete parent[key];
+            validator(candidate);
+            const missing=prioritizeErrors(validator.errors??[]).some(error=>error.keyword==='required'&&error.instancePath===path&&error.params.missingProperty===key);
+            if(missing)required.push({path:childPath,rule:'required',types:field.types});
+          }
+          visit(value[key],childPath,childGuidePath);
+        }
+      }
+    };
+    visit(item,'','imoveis[]');
+    return required;
+  }
   parse(raw: unknown) {
     if (typeof raw === 'string') raw = raw.replace(/^\uFEFF/, '');
     if (typeof raw !== 'string') throw new BadRequestException('Envie o conteúdo do arquivo JSON.');
@@ -69,14 +100,39 @@ export class AuditService {
     }
     return result;
   }
-  private classifiedRaw(raw:unknown,changes:unknown={},taxChanges:unknown={}) {
-    const source=this.parse(raw);
-    const classifications=this.validateClassifications(raw,changes);
-    let output=source.raw;
+  validatePropertyChanges(raw:unknown,classifications:Record<number,number>,changes:unknown={}) {
+    const {data}=this.parse(raw);
+    if(!object(changes))throw new BadRequestException('Tipos de alteração do imóvel inválidos.');
+    const result:Record<number,number>={};
+    for(const [key,value] of Object.entries(changes)){
+      const index=Number(key);
+      const item=data.imoveis[index];
+      if(!/^\d+$/.test(key)||!Number.isSafeInteger(index)||String(index)!==key||!object(item)||(classifications[index]??item.ato)!==5){
+        throw new BadRequestException('O tipo de alteração do imóvel exige um ato com classificação 5.');
+      }
+      if(typeof value!=='number'||!Number.isInteger(value)||value<1||value>12){
+        throw new BadRequestException('O tipo de alteração do imóvel deve ser um código entre 1 e 12.');
+      }
+      result[index]=value;
+    }
+    return result;
+  }
+  validateFieldEdits(raw:unknown,edits:unknown){
+    const result=applyFieldEdits(this.parse(raw).raw,edits);
+    this.parse(result.raw);
+    return result;
+  }
+  private classifiedRaw(raw:unknown,changes:unknown={},taxChanges:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
+    const corrected=this.validateFieldEdits(raw,fieldEdits).raw;
+    const classifications=this.validateClassifications(corrected,changes);
+    let output=corrected;
     for(const [index,code] of Object.entries(classifications)){
       output=applyEdits(output,modify(output,['imoveis',Number(index),'ato'],code,{}));
     }
-    const taxes=this.validateTaxOverrides(raw,taxChanges);
+    for(const [index,code] of Object.entries(this.validatePropertyChanges(corrected,classifications,propertyChanges))){
+      output=applyEdits(output,modify(output,['imoveis',Number(index),'alteracao_imovel'],code,{}));
+    }
+    const taxes=this.validateTaxOverrides(corrected,taxChanges);
     for(const [index,tax] of Object.entries(taxes)){
       const path=['imoveis',Number(index),'valor_imposto'];
       output=applyEdits(output,modify(output,path,0,{}));
@@ -88,26 +144,29 @@ export class AuditService {
   private issues(errors: ErrorObject[] | null | undefined) {
     return (errors ?? []).map(e => ({path: (e.instancePath + (e.keyword === 'required' ? '/' + e.params.missingProperty : e.keyword === 'additionalProperties' ? '/' + e.params.additionalProperty : '')) || '/', rule: e.keyword, message: describeError(e), source: `Anexo II · ${e.schemaPath}`}));
   }
-  audit(raw: unknown, classifications:unknown={},taxOverrides:unknown={}) {
+  audit(raw: unknown, classifications:unknown={},taxOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
     const original=this.parse(raw);
-    const {data} = this.parse(this.classifiedRaw(raw,classifications,taxOverrides));
+    const {data} = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,propertyChanges,fieldEdits));
     const root = this.roots.get(1)!;
     root(data);
-    const rootIssues = this.issues(root.errors);
+    const rootIssues = this.issues(root.errors).map(issue=>({
+      ...issue, types:this.guides.urbanos.find(field=>field.path===issue.path.slice(1))?.types,
+    }));
     const items = data.imoveis.map((item: unknown, index: number) => {
       const value = object(item) ? item : {};
       const validator = this.validators.get(value.tipo_imovel);
       const valid = validator ? !!validator(item) : false;
       const rawErrors = validator?.errors ? [...validator.errors] : [];
-      const issues = validator ? this.issues(prioritizeErrors(rawErrors)) : [{path: '/tipo_imovel', rule: 'type', message: 'Informe tipo_imovel 1 (urbano) ou 2 (rural).', source: 'Anexo I · Regras gerais'}];
+      const fields = this.guides[value.tipo_imovel===1?'urbanos':'rurais'];
+      const issues = validator ? this.issues(prioritizeErrors(rawErrors)) : [{path: object(item)?'/tipo_imovel':'/', rule: 'type', message: 'Informe tipo_imovel 1 (urbano) ou 2 (rural).', source: 'Anexo I · Regras gerais'}];
       const legacy = value.motivo_envio === 2;
       const acts: Record<number,string> = {1:'Abertura de matrícula',2:'Abertura de ofício / decisão judicial',3:'Alteração da relação jurídica',4:'Transmissão / aquisição de direitos reais',5:'Alteração do imóvel',6:'Outro'};
-      return {index, originalAct: original.data.imoveis[index]?.ato ?? null, act: acts[value.ato] ?? 'Ato não informado', actNumber: String(value.numero_ato ?? ''), actDate: String(value.data_ato ?? ''), actType: value.tipo_ato === 1 ? 'Registro' : value.tipo_ato === 2 ? 'Averbação' : 'Não informado', rawIssues: this.issues(rawErrors), recordType: value.tipo_matricula_transcricao === 1 ? 'Matrícula' : value.tipo_matricula_transcricao === 2 ? 'Transcrição' : 'Tipo de registro não informado', label: String((value.tipo_matricula_transcricao === 1 ? value.numero_matricula : value.tipo_matricula_transcricao === 2 ? value.numero_transcricao : undefined) ?? 'Número não informado'), type: value.tipo_imovel === 1 ? 'Urbano' : value.tipo_imovel === 2 ? 'Rural' : 'Desconhecido', reason: legacy ? 'Acervo' : value.motivo_envio === 1 ? 'Novo ato' : 'Não informado', status: valid ? 'valid' : legacy ? 'review' : 'invalid', documentationNotes: documentationNotes(value), issues: issues.map(issue => ({...issue, ...classifyIssue(issue, value), explanation: explainRequirement(issue.path, value)})), guidance: legacy ? 'Acervo: revisar o enquadramento e a flexibilização do art. 3º-A, §3º. Divergências no schema não determinam exclusão automática.' : 'Conferir o enquadramento do ato no Anexo I. A validade estrutural não determina a obrigação de comunicar.', data: item};
+      return {index, requiredFields:this.requiredFields(item), originalAct: original.data.imoveis[index]?.ato ?? null, act: acts[value.ato] ?? 'Ato não informado', actNumber: String(value.numero_ato ?? ''), actDate: String(value.data_ato ?? ''), actType: value.tipo_ato === 1 ? 'Registro' : value.tipo_ato === 2 ? 'Averbação' : 'Não informado', rawIssues: this.issues(rawErrors), recordType: value.tipo_matricula_transcricao === 1 ? 'Matrícula' : value.tipo_matricula_transcricao === 2 ? 'Transcrição' : 'Tipo de registro não informado', label: String((value.tipo_matricula_transcricao === 1 ? value.numero_matricula : value.tipo_matricula_transcricao === 2 ? value.numero_transcricao : undefined) ?? 'Número não informado'), type: value.tipo_imovel === 1 ? 'Urbano' : value.tipo_imovel === 2 ? 'Rural' : 'Desconhecido', reason: legacy ? 'Acervo' : value.motivo_envio === 1 ? 'Novo ato' : 'Não informado', status: valid ? 'valid' : legacy ? 'review' : 'invalid', documentationNotes: documentationNotes(value), issues: issues.map(issue => ({...issue, ...classifyIssue(issue, value), explanation: explainRequirement(issue.path, value), types: issue.path==='/'?['object']:fields.find(field=>field.path==='imoveis[]'+issue.path.replace(/\/\d+(?=\/|$)/g,'[]').replaceAll('/','.'))?.types})), guidance: legacy ? 'Acervo: revisar o enquadramento e a flexibilização do art. 3º-A, §3º. Divergências no schema não determinam exclusão automática.' : 'Conferir o enquadramento do ato no Anexo I. A validade estrutural não determina a obrigação de comunicar.', data: item};
     });
     return {rootIssues, items, schemaVersion: '1.3.0'};
   }
-  export(raw: unknown, excluded: unknown, classifications:unknown={},taxOverrides:unknown={}) {
-    const parsed = this.parse(this.classifiedRaw(raw,classifications,taxOverrides));
+  export(raw: unknown, excluded: unknown, classifications:unknown={},taxOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
+    const parsed = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,propertyChanges,fieldEdits));
     if (!Array.isArray(excluded) || excluded.some(i => !Number.isInteger(i) || i < 0 || i >= parsed.data.imoveis.length)) throw new BadRequestException('Índices de exclusão inválidos.');
     const remove = new Set(excluded);
     const array = findNodeAtLocation(parsed.tree, ['imoveis'])!;
