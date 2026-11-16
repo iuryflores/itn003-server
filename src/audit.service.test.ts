@@ -127,3 +127,30 @@ test('rejects invalid tax overrides before audit and export',()=>{
   assert.throws(()=>service.audit(raw,{},invalid));assert.throws(()=>service.export(raw,[],{},invalid));
  }
 });
+
+test('manual pending fields revalidate, export and restore without changing original tokens',()=>{
+ const raw='{"imoveis":[{"tipo_imovel":2,"contexto_rural":1,"motivo_envio":1,"ato":4,"extra":9007199254740993},{"tipo_imovel":2}]}';
+ const changes={0:{cod_sncr:'0012345678901'}};
+ const audit=service.audit(raw,{}, {},changes);
+ assert.equal(audit.items[0].data.cod_sncr,'0012345678901');
+ assert.ok(!audit.items[0].rawIssues.some((issue:any)=>issue.path==='/cod_sncr'));
+ const output=service.export(raw,[1],{}, {},changes);
+ assert.equal(JSON.parse(output).imoveis[0].cod_sncr,'0012345678901');
+ assert.ok(output.includes('9007199254740993'));
+ assert.equal(service.export(raw,[],{}, {},{}),raw);
+ assert.ok(service.audit(raw,{}, {},{0:{cod_sncr:'bad'}}).items[0].rawIssues.some((issue:any)=>issue.path==='/cod_sncr'));
+ for(const change of [{2:{cod_sncr:'123'}},{0:{unknown:'x'}},{0:{ato:4}},{0:{valor_imposto:3}},JSON.parse('{"0":{"__proto__":{}}}')])assert.throws(()=>service.audit(raw,{}, {},change));
+});
+
+test('combines saved field overrides with precise field edits and property changes',()=>{
+ const raw='{"imoveis":[{"tipo_imovel":2,"ato":5,"extra":9007199254740993}]}';
+ const fieldOverrides={0:{cod_sncr:'0012345678901',alteracao_imovel:1}};
+ const propertyChanges={0:2};
+ const fieldEdits=[{index:0,path:'/extra',value:'9007199254740993.1200'}];
+ const audit=service.audit(raw,{}, {},fieldOverrides,propertyChanges,fieldEdits);
+ assert.equal(audit.items[0].data.cod_sncr,'0012345678901');
+ assert.equal(audit.items[0].data.alteracao_imovel,2);
+ const result=service.export(raw,[],{}, {},fieldOverrides,propertyChanges,fieldEdits);
+ assert.ok(result.includes('9007199254740993.1200'));
+ assert.equal(JSON.parse(result).imoveis[0].alteracao_imovel,2);
+});

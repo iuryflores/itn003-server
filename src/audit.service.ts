@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { prioritizeErrors, describeError, explainRequirement, classifyIssue, documentationNotes } from './diagnostics';
+import { prioritizeErrors, issueExample, describeError, explainRequirement, classifyIssue, documentationNotes } from './diagnostics';
 import Ajv, { ErrorObject, ValidateFunction } from 'ajv';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -122,8 +122,28 @@ export class AuditService {
     this.parse(result.raw);
     return result;
   }
-  private classifiedRaw(raw:unknown,changes:unknown={},taxChanges:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
-    const corrected=this.validateFieldEdits(raw,fieldEdits).raw;
+  validateFieldOverrides(raw:unknown,changes:unknown={}) {
+    const {data}=this.parse(raw);
+    if(!object(changes))throw new BadRequestException('Alterações de campos inválidas.');
+    const result:Record<string,Record<string,unknown>>={};
+    const allowed=new Set(Object.values(this.guides).flat().filter(field=>/^imoveis\[\]\.[^.]+$/.test(field.path)).map(field=>field.path.slice('imoveis[].'.length)));
+    for(const [key,fields] of Object.entries(changes)){
+      const index=Number(key);
+      if(!/^\d+$/.test(key)||!Number.isSafeInteger(index)||String(index)!==key||!object(data.imoveis[index])||!object(fields))throw new BadRequestException('Alteração referencia um ato inválido.');
+      for(const field of Object.keys(fields))if(!allowed.has(field)||['__proto__','constructor','prototype','ato','valor_imposto'].includes(field))throw new BadRequestException('Campo não permitido para edição: '+field);
+      result[key]=fields;
+    }
+    return result;
+  }
+  rawWithFieldOverrides(raw:unknown,fieldOverrides:unknown) {
+    let output=this.parse(raw).raw;
+    for(const [index,fields] of Object.entries(this.validateFieldOverrides(raw,fieldOverrides))){
+      for(const [field,value] of Object.entries(fields))output=applyEdits(output,modify(output,['imoveis',Number(index),field],value,{}));
+    }
+    return output;
+  }
+  private classifiedRaw(raw:unknown,changes:unknown={},taxChanges:unknown={},fieldOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
+    const corrected=this.validateFieldEdits(this.rawWithFieldOverrides(raw,fieldOverrides),fieldEdits).raw;
     const classifications=this.validateClassifications(corrected,changes);
     let output=corrected;
     for(const [index,code] of Object.entries(classifications)){
@@ -142,11 +162,11 @@ export class AuditService {
     return output;
   }
   private issues(errors: ErrorObject[] | null | undefined) {
-    return (errors ?? []).map(e => ({path: (e.instancePath + (e.keyword === 'required' ? '/' + e.params.missingProperty : e.keyword === 'additionalProperties' ? '/' + e.params.additionalProperty : '')) || '/', rule: e.keyword, message: describeError(e), source: `Anexo II · ${e.schemaPath}`}));
+    return (errors ?? []).map(e => ({path: (e.instancePath + (e.keyword === 'required' ? '/' + e.params.missingProperty : e.keyword === 'additionalProperties' ? '/' + e.params.additionalProperty : '')) || '/', rule: e.keyword, example:issueExample(e), message: describeError(e), source: `Anexo II · ${e.schemaPath}`}));
   }
-  audit(raw: unknown, classifications:unknown={},taxOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
+  audit(raw: unknown, classifications:unknown={},taxOverrides:unknown={},fieldOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
     const original=this.parse(raw);
-    const {data} = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,propertyChanges,fieldEdits));
+    const {data} = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,fieldOverrides,propertyChanges,fieldEdits));
     const root = this.roots.get(1)!;
     root(data);
     const rootIssues = this.issues(root.errors).map(issue=>({
@@ -165,8 +185,8 @@ export class AuditService {
     });
     return {rootIssues, items, schemaVersion: '1.3.0'};
   }
-  export(raw: unknown, excluded: unknown, classifications:unknown={},taxOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
-    const parsed = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,propertyChanges,fieldEdits));
+  export(raw: unknown, excluded: unknown, classifications:unknown={},taxOverrides:unknown={},fieldOverrides:unknown={},propertyChanges:unknown={},fieldEdits:unknown=[]) {
+    const parsed = this.parse(this.classifiedRaw(raw,classifications,taxOverrides,fieldOverrides,propertyChanges,fieldEdits));
     if (!Array.isArray(excluded) || excluded.some(i => !Number.isInteger(i) || i < 0 || i >= parsed.data.imoveis.length)) throw new BadRequestException('Índices de exclusão inválidos.');
     const remove = new Set(excluded);
     const array = findNodeAtLocation(parsed.tree, ['imoveis'])!;

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type {FieldEdit} from './field-edits';
 import { AuditService } from './audit.service';
-type Preparation={kind:'itn003-preparation';version:1;registry?:Registry;name?:string;file:string;raw:string;classifications?:Record<number,number>;propertyChanges?:Record<number,number>;fieldEdits?:FieldEdit[];taxOverrides?:Record<number,{value:string;source:string}>;decisions:Record<number,'keep'|'exclude'>;reasons:Record<number,string>};
+type Preparation={kind:'itn003-preparation';version:1;registry?:Registry;name?:string;file:string;raw:string;classifications?:Record<number,number>;propertyChanges?:Record<number,number>;fieldEdits?:FieldEdit[];fieldOverrides?:Record<number,Record<string,unknown>>;taxOverrides?:Record<number,{value:string;source:string}>;decisions:Record<number,'keep'|'exclude'>;reasons:Record<number,string>};
 type Saved={id:string;revision:string;createdAt:string;updatedAt:string;preparation:Preparation};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 @Injectable()
@@ -34,11 +34,12 @@ export class PreparationService {
    }
   }
   const registry=p.registry===undefined?undefined:requireRegistry(p.registry);
-  const {raw:corrected,edits:fieldEdits}=this.audit.validateFieldEdits(p.raw,p.fieldEdits);
+  const fieldOverrides=this.audit.validateFieldOverrides(p.raw,p.fieldOverrides);
+  const {raw:corrected,edits:fieldEdits}=this.audit.validateFieldEdits(this.audit.rawWithFieldOverrides(p.raw,fieldOverrides),p.fieldEdits);
   const classifications=this.audit.validateClassifications(corrected,p.classifications);
   const taxOverrides=this.audit.validateTaxOverrides(corrected,p.taxOverrides);
   const propertyChanges=this.audit.validatePropertyChanges(corrected,classifications,p.propertyChanges);
-  return {kind:'itn003-preparation',version:1,registry,name:p.name?.trim()||p.file,file:p.file,raw:p.raw,classifications,taxOverrides,propertyChanges,fieldEdits,decisions:p.decisions,reasons:p.reasons};
+  return {kind:'itn003-preparation',version:1,registry,name:p.name?.trim()||p.file,file:p.file,raw:p.raw,classifications,taxOverrides,propertyChanges,fieldEdits,fieldOverrides,decisions:p.decisions,reasons:p.reasons};
  }
  private metadata(saved:Saved) {
   const count=this.audit.parse(saved.preparation.raw).data.imoveis.length;
